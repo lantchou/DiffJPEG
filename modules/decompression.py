@@ -17,10 +17,11 @@ class y_dequantize(nn.Module):
         image(tensor): batch x height x width
 
     """
-    def __init__(self, factor=1):
+    def __init__(self, factor=1, device='cpu'):
         super(y_dequantize, self).__init__()
-        self.y_table = utils.y_table
+        self.y_table = utils.y_table.to(device)
         self.factor = factor
+        self.device = device
 
     def forward(self, image):
         return image * (self.y_table * self.factor)
@@ -35,10 +36,10 @@ class c_dequantize(nn.Module):
         image(tensor): batch x height x width
 
     """
-    def __init__(self, factor=1):
+    def __init__(self, factor=1, device='cpu'):
         super(c_dequantize, self).__init__()
         self.factor = factor
-        self.c_table = utils.c_table
+        self.c_table = utils.c_table.to(device)
 
     def forward(self, image):
         return image * (self.c_table * self.factor)
@@ -51,15 +52,15 @@ class idct_8x8(nn.Module):
     Output:
         image(tensor): batch x height x width
     """
-    def __init__(self):
+    def __init__(self, device):
         super(idct_8x8, self).__init__()
-        alpha = np.array([1. / np.sqrt(2)] + [1] * 7)
-        self.alpha = nn.Parameter(torch.from_numpy(np.outer(alpha, alpha)).float())
+        alpha = np.array([1. / np.sqrt(2)] + [1] * 7, dtype=np.float32)
+        self.alpha = nn.Parameter(torch.from_numpy(np.outer(alpha, alpha)).to(device).float())
         tensor = np.zeros((8, 8, 8, 8), dtype=np.float32)
         for x, y, u, v in itertools.product(range(8), repeat=4):
             tensor[x, y, u, v] = np.cos((2 * u + 1) * x * np.pi / 16) * np.cos(
                 (2 * v + 1) * y * np.pi / 16)
-        self.tensor = nn.Parameter(torch.from_numpy(tensor).float())
+        self.tensor = nn.Parameter(torch.from_numpy(tensor).to(device).float())
 
     def forward(self, image):
         
@@ -122,14 +123,14 @@ class ycbcr_to_rgb_jpeg(nn.Module):
     Outpput:
         result(tensor): batch x 3 x height x width
     """
-    def __init__(self):
+    def __init__(self, device):
         super(ycbcr_to_rgb_jpeg, self).__init__()
 
         matrix = np.array(
             [[1., 0., 1.402], [1, -0.344136, -0.714136], [1, 1.772, 0]],
             dtype=np.float32).T
-        self.shift = nn.Parameter(torch.tensor([0, -128., -128.]))
-        self.matrix = nn.Parameter(torch.from_numpy(matrix))
+        self.shift = nn.Parameter(torch.tensor([0, -128., -128.]).to(device))
+        self.matrix = nn.Parameter(torch.from_numpy(matrix).to(device))
 
     def forward(self, image):
         result = torch.tensordot(image + self.shift, self.matrix, dims=1)
@@ -147,16 +148,16 @@ class decompress_jpeg(nn.Module):
     Ouput:
         image(tensor): batch x 3 x height x width
     """
-    def __init__(self, height, width, rounding=torch.round, factor=1):
+    def __init__(self, height, width, rounding=torch.round, factor=1, device='cpu'):
         super(decompress_jpeg, self).__init__()
-        self.c_dequantize = c_dequantize(factor=factor)
-        self.y_dequantize = y_dequantize(factor=factor)
-        self.idct = idct_8x8()
+        self.c_dequantize = c_dequantize(factor=factor, device=device)
+        self.y_dequantize = y_dequantize(factor=factor, device=device)
+        self.idct = idct_8x8(device)
         self.merging = block_merging()
         self.chroma = chroma_upsampling()
-        self.colors = ycbcr_to_rgb_jpeg()
-        
+        self.colors = ycbcr_to_rgb_jpeg(device)
         self.height, self.width = height, width
+        self.device = device
         
     def forward(self, y, cb, cr):
         components = {'y': y, 'cb': cb, 'cr': cr}

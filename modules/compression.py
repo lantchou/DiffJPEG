@@ -15,14 +15,15 @@ class rgb_to_ycbcr_jpeg(nn.Module):
     Outpput:
         result(tensor): batch x height x width x 3
     """
-    def __init__(self):
+    def __init__(self, device):
         super(rgb_to_ycbcr_jpeg, self).__init__()
+        self.device = device
         matrix = np.array(
             [[0.299, 0.587, 0.114], [-0.168736, -0.331264, 0.5],
              [0.5, -0.418688, -0.081312]], dtype=np.float32).T
-        self.shift = nn.Parameter(torch.tensor([0., 128., 128.]))
+        self.shift = nn.Parameter(torch.tensor([0., 128., 128.]).to(device))
         #
-        self.matrix = nn.Parameter(torch.from_numpy(matrix))
+        self.matrix = nn.Parameter(torch.from_numpy(matrix).to(device))
 
     def forward(self, image):
         image = image.permute(0, 2, 3, 1)
@@ -63,8 +64,9 @@ class block_splitting(nn.Module):
     Output: 
         patch(tensor):  batch x h*w/64 x h x w
     """
-    def __init__(self):
+    def __init__(self, device):
         super(block_splitting, self).__init__()
+        self.device = device
         self.k = 8
 
     def forward(self, image):
@@ -82,16 +84,17 @@ class dct_8x8(nn.Module):
     Output:
         dcp(tensor): batch x height x width
     """
-    def __init__(self):
+    def __init__(self, device):
         super(dct_8x8, self).__init__()
+        self.device = device
         tensor = np.zeros((8, 8, 8, 8), dtype=np.float32)
         for x, y, u, v in itertools.product(range(8), repeat=4):
             tensor[x, y, u, v] = np.cos((2 * x + 1) * u * np.pi / 16) * np.cos(
                 (2 * y + 1) * v * np.pi / 16)
-        alpha = np.array([1. / np.sqrt(2)] + [1] * 7)
+        alpha = np.array([1. / np.sqrt(2)] + [1] * 7, dtype=np.float32)
         #
-        self.tensor =  nn.Parameter(torch.from_numpy(tensor).float())
-        self.scale = nn.Parameter(torch.from_numpy(np.outer(alpha, alpha) * 0.25).float() )
+        self.tensor = nn.Parameter(torch.from_numpy(tensor).to(device).float())
+        self.scale = nn.Parameter(torch.from_numpy(np.outer(alpha, alpha) * 0.25).to(device).float())
         
     def forward(self, image):
         image = image - 128
@@ -109,11 +112,11 @@ class y_quantize(nn.Module):
     Output:
         image(tensor): batch x height x width
     """
-    def __init__(self, rounding, factor=1):
+    def __init__(self, rounding, factor=1, device='cpu'):
         super(y_quantize, self).__init__()
         self.rounding = rounding
         self.factor = factor
-        self.y_table = utils.y_table
+        self.y_table = utils.y_table.to(device)
 
     def forward(self, image):
         image = image.float() / (self.y_table * self.factor)
@@ -130,11 +133,12 @@ class c_quantize(nn.Module):
     Output:
         image(tensor): batch x height x width
     """
-    def __init__(self, rounding, factor=1):
+    def __init__(self, rounding, factor=1, device='cpu'):
         super(c_quantize, self).__init__()
         self.rounding = rounding
         self.factor = factor
-        self.c_table = utils.c_table
+        self.device = device
+        self.c_table = utils.c_table.to(device)
 
     def forward(self, image):
         image = image.float() / (self.c_table * self.factor)
@@ -151,18 +155,19 @@ class compress_jpeg(nn.Module):
     Ouput:
         compressed(dict(tensor)): batch x h*w/64 x 8 x 8
     """
-    def __init__(self, rounding=torch.round, factor=1):
+    def __init__(self, rounding=torch.round, factor=1, device='cpu'):
         super(compress_jpeg, self).__init__()
+        self.device = device
         self.l1 = nn.Sequential(
-            rgb_to_ycbcr_jpeg(),
+            rgb_to_ycbcr_jpeg(device),
             chroma_subsampling()
         )
         self.l2 = nn.Sequential(
-            block_splitting(),
-            dct_8x8()
+            block_splitting(device),
+            dct_8x8(device)
         )
-        self.c_quantize = c_quantize(rounding=rounding, factor=factor)
-        self.y_quantize = y_quantize(rounding=rounding, factor=factor)
+        self.c_quantize = c_quantize(rounding=rounding, factor=factor, device=device)
+        self.y_quantize = y_quantize(rounding=rounding, factor=factor, device=device)
 
     def forward(self, image):
         y, cb, cr = self.l1(image*255)
